@@ -88,7 +88,7 @@ echo "Binary installed at .heroku/frankenphp/bin/frankenphp" | indent
 # ─── Step 2b: Create php shim ──────────────────────────────────────────────────
 # The standalone FrankenPHP binary embeds PHP but only exposes it via
 # "frankenphp php-cli". This shim creates a "php" command so that standard
-# commands like "php artisan ..." work transparently.
+# commands like "php artisan ..." work transparently at RUNTIME.
 echo "Creating php shim (php -> frankenphp php-cli)" | indent
 
 cat > "$BUILD_DIR/.heroku/frankenphp/bin/php" <<'PHPSHIM'
@@ -99,39 +99,78 @@ exec frankenphp php-cli "$@"
 PHPSHIM
 
 chmod +x "$BUILD_DIR/.heroku/frankenphp/bin/php"
-echo "php shim created — 'php artisan ...' will use FrankenPHP" | indent
+echo "php shim created — 'php artisan ...' will use FrankenPHP at runtime" | indent
 
-# ─── Step 3: Install Composer dependencies ─────────────────────────────────────
-echo "Installing Composer dependencies" | arrow
+# ─── Step 2c: Detect system PHP ────────────────────────────────────────────────
+# During compile (build time), prefer the system PHP installed by heroku/php
+# buildpack. The FrankenPHP static binary may lack extensions like PCNTL
+# (which provides GLOB_BRACE) that are available in the full Heroku PHP install.
+# FrankenPHP is only needed at RUNTIME for Octane.
 
-# Check if composer.phar is bundled, otherwise download it
-if [ -f "$BUILD_DIR/composer.phar" ]; then
-  COMPOSER_BIN="$BUILD_DIR/composer.phar"
-  echo "Using bundled composer.phar" | indent
+SYSTEM_PHP=""
+if command -v php &>/dev/null; then
+  SYSTEM_PHP="$(command -v php)"
+  echo "System PHP found at $SYSTEM_PHP (used for build-time commands)" | indent
+  echo "PHP version: $($SYSTEM_PHP --version | head -1)" | indent
 else
-  echo "Downloading Composer" | indent
-  COMPOSER_BIN="$CACHE_DIR/composer.phar"
-  if [ ! -f "$COMPOSER_BIN" ]; then
-    curl -sSL -o "$COMPOSER_BIN" https://getcomposer.org/download/latest-stable/composer.phar
-  fi
+  echo "No system PHP found, using FrankenPHP for build commands" | indent
 fi
 
-cd "$BUILD_DIR"
+# Helper: run artisan with the best available PHP during build
+run_artisan() {
+  cd "$BUILD_DIR"
+  if [ -n "$SYSTEM_PHP" ]; then
+    "$SYSTEM_PHP" artisan "$@"
+  else
+    "$BUILD_DIR/.heroku/frankenphp/bin/frankenphp" php-cli artisan "$@"
+  fi
+}
 
-# Cache Composer packages between builds
-COMPOSER_CACHE="$CACHE_DIR/composer"
-mkdir -p "$COMPOSER_CACHE"
-export COMPOSER_HOME="$COMPOSER_CACHE"
+# Helper: run php with the best available binary during build
+run_php() {
+  if [ -n "$SYSTEM_PHP" ]; then
+    "$SYSTEM_PHP" "$@"
+  else
+    "$BUILD_DIR/.heroku/frankenphp/bin/frankenphp" php-cli "$@"
+  fi
+}
 
-echo "Running composer install --no-dev --optimize-autoloader" | indent
-"$BUILD_DIR/.heroku/frankenphp/bin/frankenphp" php-cli "$COMPOSER_BIN" install \
-  --no-dev \
-  --no-interaction \
-  --optimize-autoloader \
-  --prefer-dist \
-  2>&1 | indent
+# ─── Step 3: Install Composer dependencies ─────────────────────────────────────
+# If heroku/php buildpack ran first, dependencies are already installed.
+# Only run composer install if vendor/ is missing.
 
-echo "Composer dependencies installed" | indent
+if [ -d "$BUILD_DIR/vendor" ] && [ -f "$BUILD_DIR/vendor/autoload.php" ]; then
+  echo "Composer dependencies already installed (by heroku/php buildpack)" | arrow
+else
+  echo "Installing Composer dependencies" | arrow
+
+  if [ -f "$BUILD_DIR/composer.phar" ]; then
+    COMPOSER_BIN="$BUILD_DIR/composer.phar"
+    echo "Using bundled composer.phar" | indent
+  else
+    echo "Downloading Composer" | indent
+    COMPOSER_BIN="$CACHE_DIR/composer.phar"
+    if [ ! -f "$COMPOSER_BIN" ]; then
+      curl -sSL -o "$COMPOSER_BIN" https://getcomposer.org/download/latest-stable/composer.phar
+    fi
+  fi
+
+  cd "$BUILD_DIR"
+
+  COMPOSER_CACHE="$CACHE_DIR/composer"
+  mkdir -p "$COMPOSER_CACHE"
+  export COMPOSER_HOME="$COMPOSER_CACHE"
+
+  echo "Running composer install --no-dev --optimize-autoloader" | indent
+  run_php "$COMPOSER_BIN" install \
+    --no-dev \
+    --no-interaction \
+    --optimize-autoloader \
+    --prefer-dist \
+    2>&1 | indent
+
+  echo "Composer dependencies installed" | indent
+fi
 
 # ─── Step 4: Verify Laravel Octane + FrankenPHP ───────────────────────────────
 echo "Configuring Laravel Octane" | arrow
@@ -147,7 +186,7 @@ fi
 # Ensure octane config exists
 if [ ! -f "$BUILD_DIR/config/octane.php" ]; then
   echo "Publishing Octane config (frankenphp server)" | indent
-  "$BUILD_DIR/.heroku/frankenphp/bin/frankenphp" php-cli artisan octane:install --server=frankenphp --no-interaction 2>&1 | indent || true
+  run_artisan octane:install --server=frankenphp --no-interaction 2>&1 | indent || true
 else
   echo "Octane config found" | indent
 fi
@@ -163,7 +202,10 @@ fi
 echo "Octane configured for FrankenPHP" | indent
 
 # ─── Step 5: Laravel build optimizations ──────────────────────────────────────
-echo "Running Laravel build optimizations" | arrow
+# IMPORTANT: Uses system PHP (from heroku/php buildpack) for these commands.
+# The FrankenPHP static binary may lack extensions like PCNTL (GLOB_BRACE)
+# that some Laravel service providers need during bootstrapping.
+echo "Running Laravel build optimizations (using system PHP)" | arrow
 
 cd "$BUILD_DIR"
 
@@ -173,19 +215,19 @@ export APP_DEBUG="${APP_DEBUG:-false}"
 
 # Generate config cache
 echo "Caching config" | indent
-"$BUILD_DIR/.heroku/frankenphp/bin/frankenphp" php-cli artisan config:cache 2>&1 | indent || true
+run_artisan config:cache 2>&1 | indent || true
 
 # Generate route cache
 echo "Caching routes" | indent
-"$BUILD_DIR/.heroku/frankenphp/bin/frankenphp" php-cli artisan route:cache 2>&1 | indent || true
+run_artisan route:cache 2>&1 | indent || true
 
 # Generate view cache
 echo "Caching views" | indent
-"$BUILD_DIR/.heroku/frankenphp/bin/frankenphp" php-cli artisan view:cache 2>&1 | indent || true
+run_artisan view:cache 2>&1 | indent || true
 
 # Generate event cache (Laravel 11+)
 echo "Caching events" | indent
-"$BUILD_DIR/.heroku/frankenphp/bin/frankenphp" php-cli artisan event:cache 2>&1 | indent || true
+run_artisan event:cache 2>&1 | indent || true
 
 # Run npm build if package.json exists (for Vite/Mix assets)
 if [ -f "$BUILD_DIR/package.json" ]; then
@@ -209,7 +251,8 @@ mkdir -p "$BUILD_DIR/.profile.d"
 cat > "$BUILD_DIR/.profile.d/000_frankenphp.sh" <<'PROFILE'
 #!/usr/bin/env bash
 
-# Add FrankenPHP to PATH (binary must be named "frankenphp" for Octane)
+# Add FrankenPHP bin FIRST in PATH so the php shim and frankenphp binary
+# take precedence over the heroku/php buildpack's php at runtime.
 export PATH="$HOME/.heroku/frankenphp/bin:$PATH"
 
 # PHP configuration
