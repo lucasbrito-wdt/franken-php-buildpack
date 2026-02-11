@@ -5,12 +5,14 @@
 O FrankenPHP é um binário **staticamente compilado** que empaenta o próprio runtime PHP. Isso oferece:
 
 ✅ **Vantagens:**
+
 - Um único binário executável
 - Sem dependências de sistema
 - Muito menor que PHP completo
 - Performance superior ao PHP-FPM
 
 ❌ **Limitações:**
+
 - Não inclui todas as extensões padrão
 - Extensões críticas faltam: `mbstring`, `pcntl`, `posix`, etc.
 - Causava erro no Laravel: "Call to undefined function mb_split()"
@@ -22,6 +24,7 @@ Este buildpack resolve o problema com uma **abordagem em 3 fases**:
 ### 1️⃣ Build Time: Sistema PHP para Otimizações
 
 Durante o deploy (`bin/compile`), se o buildpack `heroku/php` foi executado primeiro:
+
 - Usa o PHP completo do `heroku/php` para rodair `php artisan config:cache`, `route:cache`, etc.
 - Essas extensões (_pcntl_) estão disponíveis no sistema
 - O binário FrankenPHP é baixado e preparado em paralelo
@@ -48,6 +51,7 @@ cp "$SYSTEM_PHP_EXT_DIR/pcntl.so" ".heroku/frankenphp/extensions/"
 ```
 
 Extensões copiadas:
+
 - ✅ `mbstring.so` (funções de string - necessário para Laravel)
 - ✅ `pcntl.so` (process control - sinais)
 - ✅ `posix.so` (POSIX API)
@@ -115,12 +119,15 @@ $ file /app/.heroku/frankenphp/bin/frankenphp
 **Causa:** Extensão `mbstring` não foi copiada
 
 **Verificar:**
+
 ```bash
 heroku logs --tail
 ```
+
 Procure por: "Copied extension: mbstring.so"
 
 Se não aparecer:
+
 - ✅ Certifique que `heroku/php` buildpack está **ANTES** deste buildpack
 - ✅ Faça deploy novo
 
@@ -136,6 +143,7 @@ git push heroku main
 **Causa:** Você não tem `heroku/php` buildpack
 
 **Solução:** Adicione-o:
+
 ```bash
 heroku buildpacks:add --index 1 heroku/php
 ```
@@ -149,18 +157,22 @@ heroku run php -m | grep -E "mbstring|pcntl|posix"
 ## Alternativas (não recomendadas)
 
 ### ❌ Opção 1: Trocar para Swoole/Roadrunner
+
 - Abandona FrankenPHP
 - Perde os benefícios de ter um binário moderno
 
 ### ❌ Opção 2: Usar sistema PHP em runtime
+
 - Deixa heroku/php na PATH
 - Perde performance do FrankenPHP embedded
 
 ### ❌ Opção 3: Compilar FrankenPHP customizado
+
 - Requer Docker + Go + build complexo
 - Tempo de build muito maior
 
 ### ✅ Opção escolhida: Carregar extensões dinamicamente
+
 - FrankenPHP mantém a velocidade
 - Extensões vêm do sistema PHP (compatível)
 - Simples e confiável
@@ -191,6 +203,7 @@ R: Sim, é idêntico. Estamos usando as extensões compiladas do heroku/php, nã
 **P: E se não usar heroku/php buildpack?**
 
 R: FrankenPHP ainda funciona mas sem essas extensões. Você pode:
+
 - Adicionar os .so files manualmente
 - Ou recompilar FrankenPHP com as extensões
 
