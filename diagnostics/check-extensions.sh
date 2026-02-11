@@ -1,54 +1,59 @@
 #!/usr/bin/env bash
 # Script de diagnóstico para verificar extensões PHP em runtime
-# Use: heroku run php diagnostics/check-extensions.php
+# Use: heroku run bash diagnostics/check-extensions.sh
 
 echo "=== FrankenPHP Extensions Diagnostic ==="
 echo ""
 
-# Check if extensions directory exists
-if [ -d "/app/.heroku/frankenphp/extensions" ]; then
-    echo "✅ Extensions directory exists: /app/.heroku/frankenphp/extensions"
-    echo ""
-    echo "Files in extensions directory:"
-    ls -lh /app/.heroku/frankenphp/extensions/ 2>/dev/null || echo "  (empty or no access)"
+# Check FrankenPHP binary
+echo "=== FrankenPHP Binary ==="
+if command -v frankenphp &>/dev/null; then
+  echo "✅ frankenphp found at: $(command -v frankenphp)"
+  frankenphp version 2>/dev/null || echo "  (version not available)"
 else
-    echo "❌ Extensions directory NOT found: /app/.heroku/frankenphp/extensions"
+  echo "❌ frankenphp NOT found in PATH"
 fi
 
 echo ""
-echo "=== PHP Configuration ==="
-php -i 2>/dev/null | grep -E "extension_dir|Configuration File|Loaded Configuration" || echo "  (unable to read php -i)"
-
-echo ""
-echo "=== PHP Loaded Extensions ==="
-php -m 2>/dev/null | grep -E "mbstring|pcntl|posix|sockets" || echo "  Critical extensions NOT loaded"
-
-echo ""
-echo "=== PHP INI Scan Directory ==="
-echo "PHP_INI_SCAN_DIR: $PHP_INI_SCAN_DIR"
-if [ -d "$PHP_INI_SCAN_DIR" ]; then
-    echo "✅ Directory exists"
-    echo "INI files:"
-    ls -lh "$PHP_INI_SCAN_DIR" || echo "  (unable to list)"
+echo "=== PHP Shim ==="
+if command -v php &>/dev/null; then
+  echo "✅ php found at: $(command -v php)"
+  php --version 2>/dev/null | head -1
 else
-    echo "❌ PHP_INI_SCAN_DIR does not exist"
+  echo "❌ php NOT found in PATH"
 fi
 
 echo ""
-echo "=== heroku.ini Content (first 30 lines) ==="
-if [ -f "$PHP_INI_SCAN_DIR/heroku.ini" ]; then
-    head -30 "$PHP_INI_SCAN_DIR/heroku.ini"
-else
-    echo "❌ $PHP_INI_SCAN_DIR/heroku.ini NOT found"
-fi
+echo "=== Built-in PHP Extensions ==="
+echo "FrankenPHP standalone includes these extensions statically compiled:"
+echo ""
+frankenphp php-cli -m 2>/dev/null || php -m 2>/dev/null || echo "  (unable to list modules)"
+
+echo ""
+echo "=== Critical Extensions Check ==="
+CRITICAL_EXTS="mbstring pcntl posix sockets opcache curl gd intl pdo pdo_mysql pdo_pgsql"
+for ext in $CRITICAL_EXTS; do
+  if frankenphp php-cli -m 2>/dev/null | grep -qi "^${ext}$"; then
+    echo "  ✅ $ext"
+  else
+    echo "  ❌ $ext (NOT available)"
+  fi
+done
 
 echo ""
 echo "=== Test mb_split function ==="
-php -r "echo 'Testing mb_split: '; var_dump(function_exists('mb_split')); if (function_exists('mb_split')) { echo 'Result: ' . implode(', ', mb_split('\\s+', 'hello world')) . PHP_EOL; }" 2>&1 || echo "  Failed to execute test"
+frankenphp php-cli -r "echo 'Testing mb_split: '; var_dump(function_exists('mb_split')); if (function_exists('mb_split')) { echo 'Result: ' . implode(', ', mb_split('\\s+', 'hello world')) . PHP_EOL; } else { echo 'FAIL: mb_split not available' . PHP_EOL; }" 2>&1
 
 echo ""
-echo "=== ldd analysis of frankenphp binary ==="
-ldd /app/.heroku/frankenphp/bin/frankenphp 2>&1 | head -10
+echo "=== Environment ==="
+echo "PATH: $PATH"
+echo "HOME: $HOME"
+echo "OCTANE_SERVER: ${OCTANE_SERVER:-not set}"
+echo "APP_ENV: ${APP_ENV:-not set}"
 
 echo ""
-echo "Done! Compare output with expected values above."
+echo "=== FrankenPHP Binary Info ==="
+file "$(command -v frankenphp 2>/dev/null || echo /app/.heroku/frankenphp/bin/frankenphp)" 2>/dev/null || echo "  (file command not available)"
+
+echo ""
+echo "Done!"

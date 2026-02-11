@@ -188,30 +188,22 @@ O buildpack configura o PHP automaticamente com:
 
 ### Extensões PHP
 
-O FrankenPHP é um binário standalone estaticamente compilado e não inclui todas as extensões padrão do PHP. O buildpack resolve isso de forma inteligente:
+O binário standalone do FrankenPHP já inclui as extensões PHP mais populares **compiladas estaticamente** no binário. Não é necessário instalar extensões separadamente.
 
-1. **Build time**: Detecta se `heroku/php` buildpack foi executado primeiro e usa esse PHP para comandos que precisam de extensões (como `php artisan config:cache`)
-2. **Runtime**: Copia extensões críticas do sistema PHP (`mbstring`, `pcntl`, `posix`, `sockets`, etc.) para o diretório `.heroku/frankenphp/extensions`
-3. **PHP.ini**: Configura `extension_dir` e carrega automaticamente as extensões copiadas
+**Extensões incluídas no FrankenPHP standalone:**
 
-Isso permite que o FrankenPHP tenha acesso às extensões necessárias during runtime, enquanto mantém a velocidade do binário standalone.
+- `mbstring`, `intl`, `iconv` (internacionalização e strings)
+- `pcntl`, `posix` (process control e sinais)
+- `opcache` (opcode caching + JIT)
+- `curl`, `openssl`, `sodium` (rede e criptografia)
+- `gd` (imagens)
+- `pdo`, `pdo_mysql`, `pdo_pgsql`, `pdo_sqlite` (banco de dados)
+- `sockets`, `filter`, `session`, `tokenizer`, `xml`, `zip`, `zlib`
+- E muitas outras
 
-**Extensões que são incluídas automaticamente:**
-
-- `mbstring` (strings multibyte - necessário para Laravel)
-- `pcntl` (process control - para sinais de Laravel)
-- `posix` (POSIX API)
-- `sockets` (sockets)
-- `opcache` (opcode caching)
-- `redis` (se disponível)
-- `igbinary` (serialização)
-
-Se você precisar de extensões adicionais, configure `heroku/php` buildpack primeiro:
-
-```bash
-heroku buildpacks:add --index 1 heroku/php
-heroku buildpacks:add --index 2 https://github.com/your-org/franken-php-buildpack.git
-```
+> **Nota:** FrankenPHP **não suporta** carregamento dinâmico de extensões (`.so`).
+> Todas as extensões precisam estar compiladas no binário. As extensões incluídas
+> no release oficial cobrem a grande maioria dos casos de uso do Laravel.
 
 ## Estrutura dos arquivos
 
@@ -290,56 +282,33 @@ heroku logs --tail
 
 ### Extensão PHP faltando
 
-Se receber erro como `Call to undefined function mb_split()`:
+O FrankenPHP standalone inclui a maioria das extensões populares. Se mesmo assim
+receber erro como `Call to undefined function ...`:
 
-1. Verifique se o `heroku/php` buildpack foi adicionado ANTES deste buildpack
-2. Execute `heroku logs --tail` para ver quais extensões foram copiadas
-3. Se a extensão não aparecer, adicione `heroku/php` explicitamente:
+1. Verifique se a extensão está incluída no FrankenPHP: `heroku run frankenphp php-cli -m`
+2. Se a extensão não estiver listada, ela não está compilada no binário standalone
+3. Nesse caso, use `heroku/php` buildpack como primeiro buildpack para que o sistema PHP
+   esteja disponível nos comandos de build
 
 ```bash
 heroku buildpacks:clear
 heroku buildpacks:add heroku/php
-heroku buildpacks:add https://github.com/your-org/franken-php-buildpack.git
+heroku buildpacks:add https://github.com/lucasbrito-wdt/franken-php-buildpack.git
 ```
-
-1. Faça deploy novo e verifique `heroku logs` durante o build
 
 ### Diagnosticar extensões em runtime
 
-Se as extensões não carregam mesmo após o deploy, execute:
+Execute o script de diagnóstico:
 
 ```bash
 heroku run bash diagnostics/check-extensions.sh
 ```
 
-Isso verifica:
+Ou verifique as extensões diretamente:
 
-- ✅ Se o diretório `/app/.heroku/frankenphp/extensions/` existe
-- ✅ Se os arquivos `.so` estão presentes
-- ✅ Se a configuração PHP_INI_SCAN_DIR está correta
-- ✅ Se `mb_split()` funciona
-- ✅ Análise do binary FrankenPHP (ldd)
-
-Exemplo de output esperado:
-
+```bash
+heroku run frankenphp php-cli -m
 ```
-✅ Extensions directory exists: /app/.heroku/frankenphp/extensions
-Files in extensions directory:
-  /app/.heroku/frankenphp/extensions/mbstring.so
-  /app/.heroku/frankenphp/extensions/pcntl.so
-  /app/.heroku/frankenphp/extensions/opcache.so
-
-PHP Configuration File: /app/.heroku/frankenphp/etc/php.d/heroku.ini
-
-Testing mb_split: bool(true)
-Result: hello, world
-```
-
-Se houver problemas:
-
-- `❌ Extensions directory NOT found` - O diretório não foi criado/copiado. Verifique `heroku logs` no build.
-- `Extension NOT loaded but exists` - Problema de permissões. Execute: `heroku run chmod +x /app/.heroku/frankenphp/extensions/*.so`
-- `mb_split: bool(false)` - Extensão não foi carregada. Verifique PATH e PHP_INI_SCAN_DIR no `heroku logs`
 
 ## Performance
 
