@@ -253,16 +253,32 @@ echo "Creating runtime environment" | arrow
 
 mkdir -p "$BUILD_DIR/.profile.d"
 
-cat > "$BUILD_DIR/.profile.d/000_frankenphp.sh" <<'PROFILE'
+# Use zzz_ prefix so this runs AFTER heroku/php's .profile.d scripts,
+# ensuring our FrankenPHP PATH override takes final precedence.
+cat > "$BUILD_DIR/.profile.d/zzz_frankenphp.sh" <<'PROFILE'
 #!/usr/bin/env bash
+# FrankenPHP runtime environment — runs LAST to override heroku/php PATH.
 
 # Add FrankenPHP bin FIRST in PATH so the php shim and frankenphp binary
 # take precedence over the heroku/php buildpack's php at runtime.
+# This is critical: FrankenPHP includes pcntl, posix, etc. compiled
+# statically — heroku/php's PHP may NOT have these extensions.
 export PATH="$HOME/.heroku/frankenphp/bin:$PATH"
+
+# Tell FrankenPHP's PHP where to find our custom .ini files
+# (standalone binary defaults to /etc/frankenphp/php.d/ which is read-only on Heroku)
+export PHP_INI_SCAN_DIR="$HOME/.heroku/frankenphp/etc/php.d"
 
 # FrankenPHP / Caddy config dirs
 export XDG_CONFIG_HOME="$HOME/.config"
 export XDG_DATA_HOME="$HOME/.local/share"
+
+# Go runtime optimizations (FrankenPHP is written in Go)
+export GODEBUG="${GODEBUG:-cgocheck=0}"
+
+# Disable Caddy's automatic HTTPS — Heroku handles TLS termination externally.
+# Listen on HTTP only at the $PORT Heroku assigns.
+export SERVER_NAME="${SERVER_NAME:-http://0.0.0.0:${PORT:-8000}}"
 
 # Laravel defaults
 export APP_ENV="${APP_ENV:-production}"
@@ -283,12 +299,19 @@ cat > "$BUILD_DIR/.heroku/frankenphp/bin/start-octane" <<'STARTUP'
 #!/usr/bin/env bash
 set -eo pipefail
 
+# Ensure FrankenPHP's php shim is always used (safety net beyond .profile.d)
+export PATH="$HOME/.heroku/frankenphp/bin:$PATH"
+
 # Resolve settings from env vars with defaults
 HOST="${OCTANE_HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"
 WORKERS="${OCTANE_WORKERS:-auto}"
 TASK_WORKERS="${OCTANE_TASK_WORKERS:-auto}"
 MAX_REQUESTS="${OCTANE_MAX_REQUESTS:-500}"
+
+# Verify FrankenPHP is the active PHP (pcntl, posix, etc. required by Octane)
+ACTIVE_PHP=$(which php 2>/dev/null || true)
+echo "-----> Active PHP: $ACTIVE_PHP"
 
 # Run release script if present
 if [ -f "scripts/release.sh" ] && [ "${RUN_RELEASE_SCRIPT:-false}" = "true" ]; then
