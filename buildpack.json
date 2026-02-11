@@ -1,0 +1,13 @@
+{
+    "name": "FrankenPHP Laravel Octane Buildpack",
+    "description": "Heroku buildpack for Laravel Octane powered by FrankenPHP standalone binary (no Docker required).",
+    "keywords": [
+        "frankenphp",
+        "laravel",
+        "octane",
+        "php",
+        "heroku",
+        "buildpack"
+    ],
+    "website": "https://frankenphp.dev"
+}

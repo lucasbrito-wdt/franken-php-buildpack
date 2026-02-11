@@ -1,0 +1,4 @@
+#!/usr/bin/env php
+<?php
+// Fake artisan for buildpack testing
+echo "Laravel Artisan (test stub)\n";

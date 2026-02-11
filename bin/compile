@@ -1,0 +1,331 @@
+#!/usr/bin/env bash
+# bin/compile <build-dir> <cache-dir> <env-dir>
+# Install FrankenPHP and configure Laravel Octane.
+
+set -eo pipefail
+
+BUILD_DIR=$1
+CACHE_DIR=$2
+ENV_DIR=$3
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+BIN_DIR=$(cd "$(dirname "$0")"; pwd)
+ROOT_DIR=$(dirname "$BIN_DIR")
+
+source "$BIN_DIR/util/common.sh"
+
+# ─── Read config from env vars ────────────────────────────────────────────────
+export_env_dir "$ENV_DIR"
+
+FRANKENPHP_VERSION="${FRANKENPHP_VERSION:-latest}"
+FRANKENPHP_ARCH="${FRANKENPHP_ARCH:-x86_64}"
+FRANKENPHP_LIBC="${FRANKENPHP_LIBC:-gnu}"  # gnu or musl
+
+# Laravel Octane settings
+OCTANE_WORKERS="${OCTANE_WORKERS:-auto}"
+OCTANE_MAX_REQUESTS="${OCTANE_MAX_REQUESTS:-500}"
+OCTANE_TASK_WORKERS="${OCTANE_TASK_WORKERS:-auto}"
+
+# PHP settings
+PHP_MEMORY_LIMIT="${PHP_MEMORY_LIMIT:-256M}"
+PHP_MAX_EXECUTION_TIME="${PHP_MAX_EXECUTION_TIME:-30}"
+PHP_OPCACHE_ENABLE="${PHP_OPCACHE_ENABLE:-1}"
+
+# ─── Status Helpers ───────────────────────────────────────────────────────────
+indent() {
+  sed -u 's/^/       /'
+}
+
+arrow() {
+  sed -u 's/^/-----> /'
+}
+
+# ─── Step 1: Download FrankenPHP binary ────────────────────────────────────────
+echo "Installing FrankenPHP for Laravel Octane" | arrow
+
+CACHED_BINARY="$CACHE_DIR/frankenphp-${FRANKENPHP_VERSION}-${FRANKENPHP_ARCH}-${FRANKENPHP_LIBC}"
+
+if [ -f "$CACHED_BINARY" ]; then
+  echo "Using cached FrankenPHP binary (version: ${FRANKENPHP_VERSION})" | indent
+else
+  echo "Downloading FrankenPHP binary (version: ${FRANKENPHP_VERSION}, arch: ${FRANKENPHP_ARCH}, libc: ${FRANKENPHP_LIBC})" | indent
+
+  # Resolve download URL
+  if [ "$FRANKENPHP_LIBC" = "musl" ]; then
+    BINARY_SUFFIX="linux-${FRANKENPHP_ARCH}-musl"
+  else
+    BINARY_SUFFIX="linux-${FRANKENPHP_ARCH}"
+  fi
+
+  if [ "$FRANKENPHP_VERSION" = "latest" ]; then
+    DOWNLOAD_URL="https://github.com/dunglas/frankenphp/releases/latest/download/frankenphp-${BINARY_SUFFIX}"
+  else
+    DOWNLOAD_URL="https://github.com/dunglas/frankenphp/releases/download/${FRANKENPHP_VERSION}/frankenphp-${BINARY_SUFFIX}"
+  fi
+
+  echo "URL: $DOWNLOAD_URL" | indent
+
+  mkdir -p "$CACHE_DIR"
+  curl -sSL -o "$CACHED_BINARY" "$DOWNLOAD_URL"
+
+  if [ ! -f "$CACHED_BINARY" ] || [ ! -s "$CACHED_BINARY" ]; then
+    echo "ERROR: Failed to download FrankenPHP binary" | indent
+    exit 1
+  fi
+
+  echo "Download complete" | indent
+fi
+
+# ─── Step 2: Install binary into build dir ─────────────────────────────────────
+echo "Setting up FrankenPHP runtime" | arrow
+
+mkdir -p "$BUILD_DIR/.heroku/frankenphp/bin"
+cp "$CACHED_BINARY" "$BUILD_DIR/.heroku/frankenphp/bin/frankenphp"
+chmod +x "$BUILD_DIR/.heroku/frankenphp/bin/frankenphp"
+
+echo "Binary installed at .heroku/frankenphp/bin/frankenphp" | indent
+
+# ─── Step 3: Install Composer dependencies ─────────────────────────────────────
+echo "Installing Composer dependencies" | arrow
+
+# Check if composer.phar is bundled, otherwise download it
+if [ -f "$BUILD_DIR/composer.phar" ]; then
+  COMPOSER_BIN="$BUILD_DIR/composer.phar"
+  echo "Using bundled composer.phar" | indent
+else
+  echo "Downloading Composer" | indent
+  COMPOSER_BIN="$CACHE_DIR/composer.phar"
+  if [ ! -f "$COMPOSER_BIN" ]; then
+    curl -sSL -o "$COMPOSER_BIN" https://getcomposer.org/download/latest-stable/composer.phar
+  fi
+fi
+
+cd "$BUILD_DIR"
+
+# Cache Composer packages between builds
+COMPOSER_CACHE="$CACHE_DIR/composer"
+mkdir -p "$COMPOSER_CACHE"
+export COMPOSER_HOME="$COMPOSER_CACHE"
+
+echo "Running composer install --no-dev --optimize-autoloader" | indent
+"$BUILD_DIR/.heroku/frankenphp/bin/frankenphp" php-cli "$COMPOSER_BIN" install \
+  --no-dev \
+  --no-interaction \
+  --optimize-autoloader \
+  --prefer-dist \
+  2>&1 | indent
+
+echo "Composer dependencies installed" | indent
+
+# ─── Step 4: Verify Laravel Octane + FrankenPHP ───────────────────────────────
+echo "Configuring Laravel Octane" | arrow
+
+cd "$BUILD_DIR"
+
+# Verify octane is installed
+if ! grep -q '"laravel/octane"' "$BUILD_DIR/composer.lock" 2>/dev/null; then
+  echo "WARNING: laravel/octane not found in composer.lock" | indent
+  echo "Run: composer require laravel/octane" | indent
+fi
+
+# Ensure octane config exists
+if [ ! -f "$BUILD_DIR/config/octane.php" ]; then
+  echo "Publishing Octane config (frankenphp server)" | indent
+  "$BUILD_DIR/.heroku/frankenphp/bin/frankenphp" php-cli artisan octane:install --server=frankenphp --no-interaction 2>&1 | indent || true
+else
+  echo "Octane config found" | indent
+fi
+
+# Verify the octane config uses FrankenPHP server
+if [ -f "$BUILD_DIR/config/octane.php" ]; then
+  if grep -q "'server'\s*=>\s*'swoole'" "$BUILD_DIR/config/octane.php" 2>/dev/null; then
+    echo "WARNING: config/octane.php is set to 'swoole' server." | indent
+    echo "Set OCTANE_SERVER=frankenphp in env or update config/octane.php" | indent
+  fi
+fi
+
+echo "Octane configured for FrankenPHP" | indent
+
+# ─── Step 5: Laravel build optimizations ──────────────────────────────────────
+echo "Running Laravel build optimizations" | arrow
+
+cd "$BUILD_DIR"
+
+# Set production environment for build commands
+export APP_ENV="${APP_ENV:-production}"
+export APP_DEBUG="${APP_DEBUG:-false}"
+
+# Generate config cache
+echo "Caching config" | indent
+"$BUILD_DIR/.heroku/frankenphp/bin/frankenphp" php-cli artisan config:cache 2>&1 | indent || true
+
+# Generate route cache
+echo "Caching routes" | indent
+"$BUILD_DIR/.heroku/frankenphp/bin/frankenphp" php-cli artisan route:cache 2>&1 | indent || true
+
+# Generate view cache
+echo "Caching views" | indent
+"$BUILD_DIR/.heroku/frankenphp/bin/frankenphp" php-cli artisan view:cache 2>&1 | indent || true
+
+# Generate event cache (Laravel 11+)
+echo "Caching events" | indent
+"$BUILD_DIR/.heroku/frankenphp/bin/frankenphp" php-cli artisan event:cache 2>&1 | indent || true
+
+# Run npm build if package.json exists (for Vite/Mix assets)
+if [ -f "$BUILD_DIR/package.json" ]; then
+  if command -v node &>/dev/null && command -v npm &>/dev/null; then
+    echo "Building frontend assets" | arrow
+    cd "$BUILD_DIR"
+    npm ci --production=false 2>&1 | indent
+    npm run build 2>&1 | indent || npm run production 2>&1 | indent || true
+    echo "Frontend assets built" | indent
+  else
+    echo "Node.js not found, skipping frontend build" | indent
+    echo "Add heroku/nodejs buildpack before this one for frontend assets" | indent
+  fi
+fi
+
+# ─── Step 6: Create .profile.d script ─────────────────────────────────────────
+echo "Creating runtime environment" | arrow
+
+mkdir -p "$BUILD_DIR/.profile.d"
+
+cat > "$BUILD_DIR/.profile.d/000_frankenphp.sh" <<'PROFILE'
+#!/usr/bin/env bash
+
+# Add FrankenPHP to PATH (binary must be named "frankenphp" for Octane)
+export PATH="$HOME/.heroku/frankenphp/bin:$PATH"
+
+# PHP configuration
+export PHP_INI_SCAN_DIR="$HOME/.heroku/frankenphp/etc/php.d"
+
+# FrankenPHP / Caddy config dirs
+export XDG_CONFIG_HOME="$HOME/.config"
+export XDG_DATA_HOME="$HOME/.local/share"
+
+# Laravel defaults
+export APP_ENV="${APP_ENV:-production}"
+export APP_DEBUG="${APP_DEBUG:-false}"
+export LOG_CHANNEL="${LOG_CHANNEL:-stderr}"
+export LOG_LEVEL="${LOG_LEVEL:-warning}"
+
+# Octane server
+export OCTANE_SERVER="${OCTANE_SERVER:-frankenphp}"
+PROFILE
+
+echo "Runtime environment configured" | indent
+
+# ─── Step 7: Create startup script ────────────────────────────────────────────
+echo "Creating startup script" | arrow
+
+cat > "$BUILD_DIR/.heroku/frankenphp/bin/start-octane" <<'STARTUP'
+#!/usr/bin/env bash
+set -eo pipefail
+
+# Resolve settings from env vars with defaults
+HOST="${OCTANE_HOST:-0.0.0.0}"
+PORT="${PORT:-8000}"
+WORKERS="${OCTANE_WORKERS:-auto}"
+TASK_WORKERS="${OCTANE_TASK_WORKERS:-auto}"
+MAX_REQUESTS="${OCTANE_MAX_REQUESTS:-500}"
+
+# Run Laravel migrations if enabled
+if [ "${RUN_MIGRATIONS:-false}" = "true" ]; then
+  echo "-----> Running database migrations"
+  frankenphp php-cli artisan migrate --force --no-interaction 2>&1 || true
+fi
+
+# Build Octane command
+CMD="frankenphp php-cli artisan octane:frankenphp --host=$HOST --port=$PORT --max-requests=$MAX_REQUESTS"
+
+if [ "$WORKERS" != "auto" ]; then
+  CMD="$CMD --workers=$WORKERS"
+fi
+
+if [ "$TASK_WORKERS" != "auto" ]; then
+  CMD="$CMD --task-workers=$TASK_WORKERS"
+fi
+
+echo "-----> Starting Laravel Octane with FrankenPHP"
+echo "       Host: $HOST:$PORT"
+echo "       Workers: $WORKERS"
+echo "       Task Workers: $TASK_WORKERS"
+echo "       Max Requests: $MAX_REQUESTS"
+
+exec $CMD
+STARTUP
+
+chmod +x "$BUILD_DIR/.heroku/frankenphp/bin/start-octane"
+echo "Startup script created at .heroku/frankenphp/bin/start-octane" | indent
+
+# ─── Step 8: Create storage and cache directories ─────────────────────────────
+echo "Preparing Laravel directories" | arrow
+
+# Dirs needed by Laravel at runtime
+mkdir -p "$BUILD_DIR/storage/app/public"
+mkdir -p "$BUILD_DIR/storage/framework/cache/data"
+mkdir -p "$BUILD_DIR/storage/framework/sessions"
+mkdir -p "$BUILD_DIR/storage/framework/views"
+mkdir -p "$BUILD_DIR/storage/logs"
+mkdir -p "$BUILD_DIR/bootstrap/cache"
+
+# Dirs needed by FrankenPHP/Caddy
+mkdir -p "$BUILD_DIR/.config/caddy"
+mkdir -p "$BUILD_DIR/.local/share/caddy"
+mkdir -p "$BUILD_DIR/.heroku/frankenphp/etc/php.d"
+
+# Ensure writable permissions
+chmod -R 775 "$BUILD_DIR/storage" "$BUILD_DIR/bootstrap/cache"
+
+echo "Laravel directories ready" | indent
+
+# ─── Step 9: Write PHP configuration ──────────────────────────────────────────
+echo "Writing PHP configuration" | arrow
+
+cat > "$BUILD_DIR/.heroku/frankenphp/etc/php.d/heroku.ini" <<INI
+; Heroku-specific PHP settings for Laravel Octane
+display_errors = Off
+log_errors = On
+error_log = /dev/stderr
+date.timezone = UTC
+expose_php = Off
+
+; Memory & execution
+memory_limit = ${PHP_MEMORY_LIMIT}
+max_execution_time = ${PHP_MAX_EXECUTION_TIME}
+
+; OPcache (important for Octane worker performance)
+opcache.enable = ${PHP_OPCACHE_ENABLE}
+opcache.enable_cli = 1
+opcache.memory_consumption = 128
+opcache.interned_strings_buffer = 16
+opcache.max_accelerated_files = 10000
+opcache.validate_timestamps = 0
+opcache.jit = tracing
+opcache.jit_buffer_size = 64M
+
+; Session
+session.save_handler = files
+session.save_path = /tmp
+
+; Upload
+upload_max_filesize = 64M
+post_max_size = 64M
+
+; Realpath cache (important for Octane)
+realpath_cache_size = 4096K
+realpath_cache_ttl = 600
+INI
+
+echo "PHP configured (memory: ${PHP_MEMORY_LIMIT}, OPcache: enabled, JIT: tracing)" | indent
+
+# ─── Done ─────────────────────────────────────────────────────────────────────
+echo "" | arrow
+echo "FrankenPHP + Laravel Octane buildpack complete!" | arrow
+echo "  FrankenPHP version: $FRANKENPHP_VERSION" | indent
+echo "  Workers: $OCTANE_WORKERS" | indent
+echo "  Max requests: $OCTANE_MAX_REQUESTS" | indent
+echo "  PHP memory: $PHP_MEMORY_LIMIT" | indent
+echo "" | indent
+echo "  Start command: start-octane" | indent
+echo "  Or directly: frankenphp php-cli artisan octane:frankenphp" | indent

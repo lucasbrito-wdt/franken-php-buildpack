@@ -1,0 +1,31 @@
+{
+    "name": "FrankenPHP Laravel Octane Buildpack",
+    "description": "Heroku buildpack for Laravel Octane powered by FrankenPHP standalone binary (no Docker required).",
+    "keywords": [
+        "frankenphp",
+        "laravel",
+        "octane",
+        "php",
+        "heroku",
+        "buildpack"
+    ],
+    "website": "https://frankenphp.dev",
+    "env": {
+        "FRANKENPHP_VERSION": {
+            "description": "FrankenPHP version to install (e.g. v1.4.0 or latest)",
+            "value": "latest"
+        },
+        "OCTANE_WORKERS": {
+            "description": "Number of Octane workers (auto = based on CPU cores)",
+            "value": "auto"
+        },
+        "OCTANE_MAX_REQUESTS": {
+            "description": "Max requests per worker before recycling",
+            "value": "500"
+        },
+        "APP_KEY": {
+            "description": "Laravel application key",
+            "generator": "secret"
+        }
+    }
+}

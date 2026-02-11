@@ -1,0 +1,16 @@
+api = "0.10"
+
+[buildpack]
+id = "frankenphp-laravel-octane"
+version = "1.0.0"
+name = "FrankenPHP Laravel Octane"
+homepage = "https://github.com/your-org/franken-php-buildpack"
+
+[[stacks]]
+id = "heroku-22"
+
+[[stacks]]
+id = "heroku-24"
+
+[[stacks]]
+id = "*"

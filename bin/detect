@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# bin/detect <build-dir>
+# Detect if this is a Laravel application that should use FrankenPHP + Octane.
+
+BUILD_DIR=$1
+
+# Must be a Laravel app (artisan + composer.json)
+if [ ! -f "$BUILD_DIR/artisan" ] || [ ! -f "$BUILD_DIR/composer.json" ]; then
+  exit 1
+fi
+
+# Check for laravel/octane in composer.json or composer.lock
+if grep -q '"laravel/octane"' "$BUILD_DIR/composer.json" 2>/dev/null || \
+   grep -q '"laravel/octane"' "$BUILD_DIR/composer.lock" 2>/dev/null; then
+  echo "FrankenPHP (Laravel Octane)"
+  exit 0
+fi
+
+# Also detect if octane is already installed (vendor present)
+if [ -f "$BUILD_DIR/config/octane.php" ]; then
+  echo "FrankenPHP (Laravel Octane)"
+  exit 0
+fi
+
+exit 1
