@@ -101,17 +101,48 @@ PHPSHIM
 chmod +x "$BUILD_DIR/.heroku/frankenphp/bin/php"
 echo "php shim created — 'php artisan ...' will use FrankenPHP at runtime" | indent
 
-# ─── Step 2c: Detect system PHP ────────────────────────────────────────────────
-# During compile (build time), prefer the system PHP installed by heroku/php
-# buildpack. The FrankenPHP static binary may lack extensions like PCNTL
-# (which provides GLOB_BRACE) that are available in the full Heroku PHP install.
-# FrankenPHP is only needed at RUNTIME for Octane.
+# ─── Step 2c: Detect system PHP and copy extensions ──────────────────────────
+# The FrankenPHP static binary lacks extensions like mbstring, pcntl, etc.
+# We'll use the system PHP (from heroku/php) to provide these at runtime.
+# During compile, we use system PHP for commands that need extensions.
 
 SYSTEM_PHP=""
+SYSTEM_PHP_EXT_DIR=""
+
 if command -v php &>/dev/null; then
   SYSTEM_PHP="$(command -v php)"
   echo "System PHP found at $SYSTEM_PHP (used for build-time commands)" | indent
   echo "PHP version: $($SYSTEM_PHP --version | head -1)" | indent
+  
+  # Get extension directory from system PHP
+  SYSTEM_PHP_EXT_DIR=$("$SYSTEM_PHP" -i 2>/dev/null | grep -i "extension_dir" | grep "^extension_dir" | head -1 | cut -d' ' -f5 || true)
+  
+  if [ -n "$SYSTEM_PHP_EXT_DIR" ] && [ -d "$SYSTEM_PHP_EXT_DIR" ]; then
+    echo "System PHP extension dir: $SYSTEM_PHP_EXT_DIR" | indent
+    
+    # Copy critical extensions that Laravel Octane needs
+    mkdir -p "$BUILD_DIR/.heroku/frankenphp/extensions"
+    
+    # Extensions to copy: mbstring, pcntl, posix, etc.
+    CRITICAL_EXTENSIONS=(
+      "mbstring.so"
+      "pcntl.so"
+      "posix.so"
+      "sockets.so"
+      "opcache.so"
+      "redis.so"
+      "igbinary.so"
+    )
+    
+    for ext_file in "${CRITICAL_EXTENSIONS[@]}"; do
+      if [ -f "$SYSTEM_PHP_EXT_DIR/$ext_file" ]; then
+        cp "$SYSTEM_PHP_EXT_DIR/$ext_file" "$BUILD_DIR/.heroku/frankenphp/extensions/"
+        echo "Copied extension: $ext_file" | indent
+      fi
+    done
+  else
+    echo "WARNING: Could not determine system PHP extension directory" | indent
+  fi
 else
   echo "No system PHP found, using FrankenPHP for build commands" | indent
 fi
@@ -347,6 +378,26 @@ echo "Laravel directories ready" | indent
 # ─── Step 9: Write PHP configuration ──────────────────────────────────────────
 echo "Writing PHP configuration" | arrow
 
+# Build extension loading directives if extensions dir exists
+EXTENSIONS_LOAD=""
+if [ -d "$BUILD_DIR/.heroku/frankenphp/extensions" ] && [ "$(ls -A $BUILD_DIR/.heroku/frankenphp/extensions/*.so 2>/dev/null)" ]; then
+  EXTENSIONS_LOAD="
+; Load extensions from buildpack (copied from system PHP)
+extension_dir = \$HOME/.heroku/frankenphp/extensions
+"
+  # Add extension load directives for each .so found
+  for ext_file in "$BUILD_DIR/.heroku/frankenphp/extensions"/*.so; do
+    if [ -f "$ext_file" ]; then
+      ext_name=$(basename "$ext_file" .so)
+      # Skip opcache as it's loaded separately
+      if [ "$ext_name" != "opcache" ]; then
+        EXTENSIONS_LOAD="${EXTENSIONS_LOAD}extension = ${ext_name}.so
+"
+      fi
+    fi
+  done
+fi
+
 cat > "$BUILD_DIR/.heroku/frankenphp/etc/php.d/heroku.ini" <<INI
 ; Heroku-specific PHP settings for Laravel Octane
 display_errors = Off
@@ -380,9 +431,14 @@ post_max_size = 64M
 ; Realpath cache (important for Octane)
 realpath_cache_size = 4096K
 realpath_cache_ttl = 600
+${EXTENSIONS_LOAD}
 INI
 
 echo "PHP configured (memory: ${PHP_MEMORY_LIMIT}, OPcache: enabled, JIT: tracing)" | indent
+if [ -d "$BUILD_DIR/.heroku/frankenphp/extensions" ] && [ "$(ls -A $BUILD_DIR/.heroku/frankenphp/extensions/*.so 2>/dev/null)" ]; then
+  echo "Extensions loaded:" | indent
+  ls -1 "$BUILD_DIR/.heroku/frankenphp/extensions"/*.so 2>/dev/null | sed 's/^/  - /' | indent || true
+fi
 
 # ─── Done ─────────────────────────────────────────────────────────────────────
 echo "" | arrow
@@ -392,6 +448,17 @@ echo "  Workers: $OCTANE_WORKERS" | indent
 echo "  Max requests: $OCTANE_MAX_REQUESTS" | indent
 echo "  PHP memory: $PHP_MEMORY_LIMIT" | indent
 echo "" | indent
-echo "  Start command: start-octane" | indent
-echo "  Or directly: php artisan octane:start --server=frankenphp" | indent
-echo "  Queue worker: php artisan queue:work" | indent
+echo "  Buildpack features:" | indent
+echo "  - FrankenPHP + embedded PHP server" | indent
+echo "  - System PHP extensions loaded at runtime (mbstring, pcntl, etc)" | indent
+echo "  - OPcache + JIT enabled for performance" | indent
+echo "  - Laravel cache auto-warming" | indent
+echo "" | indent
+echo "  Process types:" | indent
+echo "  - web: starts-octane (Octane + FrankenPHP)" | indent
+echo "  - worker: php artisan queue:work (if using queues)" | indent
+echo "" | indent
+echo "  Next steps:" | indent
+echo "  1. Verify config/octane.php has 'server' => 'frankenphp'" | indent
+echo "  2. Set env vars: heroku config:set APP_KEY='...' etc" | indent
+echo "  3. Deploy: git push heroku main" | indent

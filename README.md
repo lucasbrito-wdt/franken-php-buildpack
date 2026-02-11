@@ -186,6 +186,33 @@ O buildpack configura o PHP automaticamente com:
 - Logs para `stderr` (compatível com `heroku logs`)
 - `expose_php = Off` (segurança)
 
+### Extensões PHP
+
+O FrankenPHP é um binário standalone estaticamente compilado e não inclui todas as extensões padrão do PHP. O buildpack resolve isso de forma inteligente:
+
+1. **Build time**: Detecta se `heroku/php` buildpack foi executado primeiro e usa esse PHP para comandos que precisam de extensões (como `php artisan config:cache`)
+2. **Runtime**: Copia extensões críticas do sistema PHP (`mbstring`, `pcntl`, `posix`, `sockets`, etc.) para o diretório `.heroku/frankenphp/extensions`
+3. **PHP.ini**: Configura `extension_dir` e carrega automaticamente as extensões copiadas
+
+Isso permite que o FrankenPHP tenha acesso às extensões necessárias during runtime, enquanto mantém a velocidade do binário standalone.
+
+**Extensões que são incluídas automaticamente:**
+- `mbstring` (strings multibyte - necessário para Laravel)
+- `pcntl` (process control - para sinais de Laravel)
+- `posix` (POSIX API)
+- `sockets` (sockets)
+- `opcache` (opcode caching)
+- `redis` (se disponível)
+- `igbinary` (serialização)
+
+Se você precisar de extensões adicionais, configure `heroku/php` buildpack primeiro:
+
+```bash
+heroku buildpacks:add --index 1 heroku/php
+heroku buildpacks:add --index 2 https://github.com/your-org/franken-php-buildpack.git
+```
+
+
 ## Estrutura dos arquivos
 
 ```
@@ -260,6 +287,22 @@ heroku run frankenphp php-cli artisan tinker
 heroku config:set APP_DEBUG=true LOG_LEVEL=debug
 heroku logs --tail
 ```
+
+### Extensão PHP faltando
+
+Se receber erro como `Call to undefined function mb_split()`:
+
+1. Verifique se o `heroku/php` buildpack foi adicionado ANTES deste buildpack
+2. Execute `heroku logs --tail` para ver quais extensões foram copiadas
+3. Se a extensão não aparecer, adicione `heroku/php` explicitamente:
+
+```bash
+heroku buildpacks:clear
+heroku buildpacks:add heroku/php
+heroku buildpacks:add https://github.com/your-org/franken-php-buildpack.git
+```
+
+4. Faça deploy novo e verifique `heroku logs` durante o build
 
 ## Performance
 
