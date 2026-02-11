@@ -197,6 +197,7 @@ O FrankenPHP é um binário standalone estaticamente compilado e não inclui tod
 Isso permite que o FrankenPHP tenha acesso às extensões necessárias during runtime, enquanto mantém a velocidade do binário standalone.
 
 **Extensões que são incluídas automaticamente:**
+
 - `mbstring` (strings multibyte - necessário para Laravel)
 - `pcntl` (process control - para sinais de Laravel)
 - `posix` (POSIX API)
@@ -211,7 +212,6 @@ Se você precisar de extensões adicionais, configure `heroku/php` buildpack pri
 heroku buildpacks:add --index 1 heroku/php
 heroku buildpacks:add --index 2 https://github.com/your-org/franken-php-buildpack.git
 ```
-
 
 ## Estrutura dos arquivos
 
@@ -302,7 +302,7 @@ heroku buildpacks:add heroku/php
 heroku buildpacks:add https://github.com/your-org/franken-php-buildpack.git
 ```
 
-4. Faça deploy novo e verifique `heroku logs` durante o build
+1. Faça deploy novo e verifique `heroku logs` durante o build
 
 ## Performance
 

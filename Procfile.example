@@ -1,0 +1,22 @@
+# Procfile.example
+# Example custom Procfile for FrankenPHP + Laravel Octane buildpack
+# Copy this to your project as 'Procfile' and customize as needed
+
+# Main web process: Starts Laravel Octane with FrankenPHP
+# The "php" command is a shim created by the buildpack that calls "frankenphp php-cli"
+web: php artisan octane:start --server=frankenphp --host=0.0.0.0 --port=$PORT --workers=auto --max-requests=500
+
+# Queue worker process (optional)
+# Optional line if using SQS, Redis queues or database jobs
+worker: php artisan queue:work --queue=default,high --tries=3 --timeout=120
+
+# Release process (optional)
+# Runs scripts/release.sh if RUN_RELEASE_SCRIPT=true
+# release: bash scripts/release.sh
+
+# Task worker (Octane 2.2+, optional)
+# task-worker: php artisan octane:task --workers=4
+
+# Alternative: Use the start-octane helper script instead of raw command
+# web: start-octane
+# This reads env vars like OCTANE_WORKERS, OCTANE_MAX_REQUESTS automatically
