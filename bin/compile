@@ -137,9 +137,19 @@ if command -v php &>/dev/null; then
     for ext_file in "${CRITICAL_EXTENSIONS[@]}"; do
       if [ -f "$SYSTEM_PHP_EXT_DIR/$ext_file" ]; then
         cp "$SYSTEM_PHP_EXT_DIR/$ext_file" "$BUILD_DIR/.heroku/frankenphp/extensions/"
+        chmod 755 "$BUILD_DIR/.heroku/frankenphp/extensions/$ext_file"
         echo "Copied extension: $ext_file" | indent
       fi
     done
+    
+    # Verify extensions were actually copied
+    COPIED_COUNT=$(ls -1 "$BUILD_DIR/.heroku/frankenphp/extensions/"*.so 2>/dev/null | wc -l)
+    if [ "$COPIED_COUNT" -eq 0 ]; then
+      echo "WARNING: No extensions were copied from system PHP" | indent
+      echo "This may cause runtime errors if Laravel needs extensions like mbstring" | indent
+    else
+      echo "Total extensions copied: $COPIED_COUNT" | indent
+    fi
   else
     echo "WARNING: Could not determine system PHP extension directory" | indent
   fi
@@ -383,7 +393,7 @@ EXTENSIONS_LOAD=""
 if [ -d "$BUILD_DIR/.heroku/frankenphp/extensions" ] && [ "$(ls -A $BUILD_DIR/.heroku/frankenphp/extensions/*.so 2>/dev/null)" ]; then
   EXTENSIONS_LOAD="
 ; Load extensions from buildpack (copied from system PHP)
-extension_dir = \$HOME/.heroku/frankenphp/extensions
+extension_dir = /app/.heroku/frankenphp/extensions
 "
   # Add extension load directives for each .so found
   for ext_file in "$BUILD_DIR/.heroku/frankenphp/extensions"/*.so; do
@@ -438,6 +448,9 @@ echo "PHP configured (memory: ${PHP_MEMORY_LIMIT}, OPcache: enabled, JIT: tracin
 if [ -d "$BUILD_DIR/.heroku/frankenphp/extensions" ] && [ "$(ls -A $BUILD_DIR/.heroku/frankenphp/extensions/*.so 2>/dev/null)" ]; then
   echo "Extensions loaded:" | indent
   ls -1 "$BUILD_DIR/.heroku/frankenphp/extensions"/*.so 2>/dev/null | sed 's/^/  - /' | indent || true
+else
+  echo "WARNING: No PHP extensions copied. Some Laravel features may not work." | indent
+  echo "Ensure heroku/php buildpack is configured BEFORE this buildpack." | indent
 fi
 
 # ─── Done ─────────────────────────────────────────────────────────────────────
