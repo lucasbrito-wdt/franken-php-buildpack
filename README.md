@@ -303,6 +303,7 @@ heroku buildpacks:add https://github.com/your-org/franken-php-buildpack.git
 ```
 
 1. Faça deploy novo e verifique `heroku logs` durante o build
+
 ### Diagnosticar extensões em runtime
 
 Se as extensões não carregam mesmo após o deploy, execute:
@@ -312,6 +313,7 @@ heroku run bash diagnostics/check-extensions.sh
 ```
 
 Isso verifica:
+
 - ✅ Se o diretório `/app/.heroku/frankenphp/extensions/` existe
 - ✅ Se os arquivos `.so` estão presentes
 - ✅ Se a configuração PHP_INI_SCAN_DIR está correta
@@ -334,9 +336,11 @@ Result: hello, world
 ```
 
 Se houver problemas:
+
 - `❌ Extensions directory NOT found` - O diretório não foi criado/copiado. Verifique `heroku logs` no build.
 - `Extension NOT loaded but exists` - Problema de permissões. Execute: `heroku run chmod +x /app/.heroku/frankenphp/extensions/*.so`
 - `mb_split: bool(false)` - Extensão não foi carregada. Verifique PATH e PHP_INI_SCAN_DIR no `heroku logs`
+
 ## Performance
 
 Com Laravel Octane + FrankenPHP no Heroku:

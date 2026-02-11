@@ -3,6 +3,7 @@
 ## 🐛 Problema Identificado
 
 Rails executou com erro:
+
 ```
 PHP Warning: Unable to load dynamic library 'mbstring.so' 
 (tried: $HOME/.heroku/frankenphp/extensions/mbstring.so: cannot open shared object file)
@@ -17,6 +18,7 @@ Error: Call to undefined function mb_split()
 ### Arquivo: `bin/compile`
 
 **Antes:**
+
 ```bash
 EXTENSIONS_LOAD="
 extension_dir = \$HOME/.heroku/frankenphp/extensions
@@ -24,6 +26,7 @@ extension_dir = \$HOME/.heroku/frankenphp/extensions
 ```
 
 **Depois:**
+
 ```bash
 EXTENSIONS_LOAD="
 extension_dir = /app/.heroku/frankenphp/extensions
@@ -49,6 +52,7 @@ extension_dir = /app/.heroku/frankenphp/extensions
 ### Arquivo: `README.md` (novo)
 
 Adicionada seção "Diagnosticar extensões em runtime" com:
+
 - Script para verificar estado das extensões
 - Exemplos de output esperado
 - Troubleshooting de problemas comuns
@@ -56,6 +60,7 @@ Adicionada seção "Diagnosticar extensões em runtime" com:
 ### Arquivo: `diagnostics/check-extensions.sh` (novo)
 
 Script para executar em runtime e diagnosticar:
+
 ```bash
 heroku run bash diagnostics/check-extensions.sh
 ```
@@ -85,6 +90,7 @@ heroku logs --tail
 ```
 
 Procure por:
+
 ```
 -----> FrankenPHP (Laravel Octane) app detected
 Copied extension: mbstring.so
@@ -101,6 +107,7 @@ heroku run bash diagnostics/check-extensions.sh
 ```
 
 Deve mostrar:
+
 ```
 ✅ Extensions directory exists: /app/.heroku/frankenphp/extensions
 Files in extensions directory:
@@ -175,14 +182,15 @@ git push heroku main
 Se problemassistir:
 
 1. Coleta de logs:
+
 ```bash
 heroku logs --source app > /tmp/heroku.log
 heroku run bash diagnostics/check-extensions.sh > /tmp/diag.log
 ```
 
-2. Compare com esperado em `README.md` seção "Diagnosticar"
+1. Compare com esperado em `README.md` seção "Diagnosticar"
 
-3. Verifique `EXTENSIONS_SOLUTION.md` para entender a arquitetura
+2. Verifique `EXTENSIONS_SOLUTION.md` para entender a arquitetura
 
 ## 📝 Notas Técnicas
 
@@ -214,6 +222,7 @@ heroku run bash diagnostics/check-extensions.sh > /tmp/diag.log
 ## ✅ Conclusão
 
 As correções garantem que:
+
 - ✅ Extensões são copiadas do `heroku/php` buildpack
 - ✅ Caminho correto `/app` é usado (não `$HOME`)
 - ✅ Permissões são ajustadas (`chmod 755`)
