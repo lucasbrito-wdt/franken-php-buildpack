@@ -85,6 +85,22 @@ chmod +x "$BUILD_DIR/.heroku/frankenphp/bin/frankenphp"
 
 echo "Binary installed at .heroku/frankenphp/bin/frankenphp" | indent
 
+# ─── Step 2b: Create php shim ──────────────────────────────────────────────────
+# The standalone FrankenPHP binary embeds PHP but only exposes it via
+# "frankenphp php-cli". This shim creates a "php" command so that standard
+# commands like "php artisan ..." work transparently.
+echo "Creating php shim (php -> frankenphp php-cli)" | indent
+
+cat > "$BUILD_DIR/.heroku/frankenphp/bin/php" <<'PHPSHIM'
+#!/usr/bin/env bash
+# Shim: forwards "php" calls to "frankenphp php-cli"
+# This allows standard commands like "php artisan" to work with FrankenPHP.
+exec frankenphp php-cli "$@"
+PHPSHIM
+
+chmod +x "$BUILD_DIR/.heroku/frankenphp/bin/php"
+echo "php shim created — 'php artisan ...' will use FrankenPHP" | indent
+
 # ─── Step 3: Install Composer dependencies ─────────────────────────────────────
 echo "Installing Composer dependencies" | arrow
 
@@ -229,14 +245,20 @@ WORKERS="${OCTANE_WORKERS:-auto}"
 TASK_WORKERS="${OCTANE_TASK_WORKERS:-auto}"
 MAX_REQUESTS="${OCTANE_MAX_REQUESTS:-500}"
 
+# Run release script if present
+if [ -f "scripts/release.sh" ] && [ "${RUN_RELEASE_SCRIPT:-false}" = "true" ]; then
+  echo "-----> Running release script"
+  bash scripts/release.sh 2>&1 || true
+fi
+
 # Run Laravel migrations if enabled
 if [ "${RUN_MIGRATIONS:-false}" = "true" ]; then
   echo "-----> Running database migrations"
-  frankenphp php-cli artisan migrate --force --no-interaction 2>&1 || true
+  php artisan migrate --force --no-interaction 2>&1 || true
 fi
 
-# Build Octane command
-CMD="frankenphp php-cli artisan octane:frankenphp --host=$HOST --port=$PORT --max-requests=$MAX_REQUESTS"
+# Build Octane command (uses php shim -> frankenphp php-cli)
+CMD="php artisan octane:start --server=frankenphp --host=$HOST --port=$PORT --max-requests=$MAX_REQUESTS"
 
 if [ "$WORKERS" != "auto" ]; then
   CMD="$CMD --workers=$WORKERS"
@@ -328,4 +350,5 @@ echo "  Max requests: $OCTANE_MAX_REQUESTS" | indent
 echo "  PHP memory: $PHP_MEMORY_LIMIT" | indent
 echo "" | indent
 echo "  Start command: start-octane" | indent
-echo "  Or directly: frankenphp php-cli artisan octane:frankenphp" | indent
+echo "  Or directly: php artisan octane:start --server=frankenphp" | indent
+echo "  Queue worker: php artisan queue:work" | indent

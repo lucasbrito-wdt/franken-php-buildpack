@@ -23,6 +23,14 @@
             "description": "Max requests per worker before recycling",
             "value": "500"
         },
+        "QUEUE_CONNECTION": {
+            "description": "Queue driver (sqs, redis, database, etc.)",
+            "required": false
+        },
+        "SQS_QUEUES": {
+            "description": "SQS queue names (comma-separated)",
+            "required": false
+        },
         "APP_KEY": {
             "description": "Laravel application key",
             "generator": "secret"

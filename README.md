@@ -69,10 +69,20 @@ O buildpack detecta automaticamente se o projeto é elegível quando encontra:
 
 ### Runtime
 
+O buildpack cria um **shim `php`** que redireciona para `frankenphp php-cli`, permitindo usar comandos padrão do Laravel sem modificação:
+
+```bash
+# Tudo isso funciona transparentemente:
+php artisan octane:start --server=frankenphp
+php artisan queue:work
+php artisan migrate
+php artisan tinker
+```
+
 O processo web executa:
 
 ```
-frankenphp php-cli artisan octane:frankenphp --host=0.0.0.0 --port=$PORT
+php artisan octane:start --server=frankenphp --host=0.0.0.0 --port=$PORT
 ```
 
 O Octane mantém a aplicação Laravel carregada em memória, processando requisições via workers FrankenPHP.
@@ -96,7 +106,15 @@ O Octane mantém a aplicação Laravel carregada em memória, processando requis
 | `OCTANE_MAX_REQUESTS` | `500` | Máximo de requests antes de reciclar worker |
 | `OCTANE_HOST` | `0.0.0.0` | Host de escuta |
 | `OCTANE_SERVER` | `frankenphp` | Servidor Octane |
-| `RUN_MIGRATIONS` | `false` | Executar migrations automaticamente no deploy |
+| `RUN_MIGRATIONS` | `false` | Executar migrations automaticamente no startup |
+| `RUN_RELEASE_SCRIPT` | `false` | Executar `scripts/release.sh` no startup |
+
+### Queue Worker
+
+| Variável | Padrão | Descrição |
+|----------|--------|--------|
+| `QUEUE_CONNECTION` | (default do Laravel) | Driver de fila (sqs, redis, database) |
+| `SQS_QUEUES` | `default` | Nome das filas SQS (separadas por vírgula) |
 
 ### PHP
 
@@ -135,17 +153,28 @@ heroku config:set PHP_MEMORY_LIMIT=512M
 
 ## Procfile
 
-O `Procfile` padrão usa o script `start-octane`:
+O buildpack cria um shim `php` que redireciona para `frankenphp php-cli`. Isso permite usar Procfiles padrão do Laravel:
+
+```
+#release: bash scripts/release.sh
+web: php artisan octane:start --server=frankenphp --host=0.0.0.0 --port=$PORT --workers=auto
+worker: php artisan queue:work ${QUEUE_CONNECTION} --queue=${SQS_QUEUES} --tries=3 --timeout=120
+```
+
+Ou use o script `start-octane` que lê variáveis de ambiente automaticamente:
 
 ```
 web: start-octane
+worker: php artisan queue:work ${QUEUE_CONNECTION} --queue=${SQS_QUEUES} --tries=3 --timeout=120
 ```
 
-O script `start-octane` lê as variáveis de ambiente e monta o comando Octane. Você pode sobrescrever com um Procfile customizado:
+### Sobre o shim `php`
 
-```
-web: frankenphp php-cli artisan octane:frankenphp --host=0.0.0.0 --port=${PORT:-8000} --workers=4 --max-requests=1000
-```
+Como o FrankenPHP standalone não instala um binário `php` separado (usa `frankenphp php-cli`), o buildpack cria um wrapper em `.heroku/frankenphp/bin/php` que redireciona automaticamente. Isso garante compatibilidade com:
+
+- `php artisan ...` (Octane, migrations, queues, tinker, etc.)
+- `php composer.phar ...`
+- Scripts que chamam `php` diretamente
 
 ## PHP otimizado para Octane
 
@@ -213,9 +242,16 @@ heroku config:set OCTANE_MAX_REQUESTS=250
 ### Executar comandos artisan no Heroku
 
 ```bash
+heroku run php artisan tinker
+heroku run php artisan migrate
+heroku run php artisan queue:work
+heroku run php artisan db:seed
+```
+
+Ou diretamente via FrankenPHP:
+
+```bash
 heroku run frankenphp php-cli artisan tinker
-heroku run frankenphp php-cli artisan migrate
-heroku run frankenphp php-cli artisan queue:work
 ```
 
 ### Logs verbosos
